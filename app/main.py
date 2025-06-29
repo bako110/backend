@@ -32,3 +32,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/")
+async def root():
+    return {"message": "Bienvenue sur mon API FastAPI déployée sur Render !"}
