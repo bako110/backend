@@ -83,3 +83,17 @@ class ResetPasswordRequest(BaseModel):
 class SocialLoginRequest(BaseModel):
     platform: str  # "google" ou "facebook"
     access_token: str
+
+class UserSchema(BaseModel):
+    id: int
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    first_name: str
+    last_name: str
+    role: str
+
+    model_config = {
+        "from_attributes": True  # Remplace orm_mode = True en Pydantic V2
+    }
+
+

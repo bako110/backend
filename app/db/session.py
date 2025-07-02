@@ -1,14 +1,28 @@
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from app.config import settings
+from dotenv import load_dotenv
+import os
 
-# Base pour les modèles
+load_dotenv()
+
+POSTGRES_URL = os.getenv("POSTGRES_URL")  # Exemple: "postgresql+asyncpg://users:6277bako@localhost/Annivdb"
+
 Base = declarative_base()
 
-engine = create_async_engine(settings.POSTGRES_URL, echo=True)
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+# Créer le moteur async
+engine = create_async_engine(POSTGRES_URL, echo=True)
 
+# Session async
+AsyncSessionLocal = sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+# Dépendance FastAPI pour obtenir la session
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
