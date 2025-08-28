@@ -115,6 +115,7 @@ async def create_event(
             ),
             participant_count=len(db_event.participants),
             is_full=len(db_event.participants) >= db_event.max_attendees if db_event.max_attendees else False,
+            comments_count=db_event.comments_count or 0,  # <-- Ajout ici
         )
 
     except json.JSONDecodeError as e:
@@ -192,10 +193,16 @@ async def create_comment(
             author_id=current_user.id,
         )
         db.add(db_comment)
+
+        # Incrémenter le compteur de commentaires de l'événement
+        event.comments_count = (event.comments_count or 0) + 1
+        db.add(event)
+
+        # Valider les changements en base
         await db.commit()
         await db.refresh(db_comment)
 
-        # Recharger avec les relations
+        # Recharger avec les relations pour la réponse
         result = await db.execute(
             select(EventComment)
             .where(EventComment.id == db_comment.id)
@@ -205,6 +212,7 @@ async def create_comment(
             )
         )
         db_comment_full = result.scalars().first()
+
         return db_comment_full
 
     except Exception as e:
@@ -213,7 +221,6 @@ async def create_comment(
             status_code=500,
             detail="Internal error while creating the comment"
         )
-
 
 def build_comment_response(comment: EventComment) -> EventCommentResponse:
     return EventCommentResponse(
@@ -227,31 +234,22 @@ def build_comment_response(comment: EventComment) -> EventCommentResponse:
     )
 
 @router.get("/events/{event_id}/comments/", response_model=List[EventCommentResponse])
-async def read_comments(event_id: int, db: AsyncSession = Depends(get_db)):
-    # Vérifie que l'événement existe
-    event = await db.get(Event, event_id)
-    if not event:
+async def read_comments(
+    event_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user_optional)  # optionnel si tu veux vérifier auth
+):
+    event_service = EventService(db)
+    try:
+        comments = await event_service.get_comments(event_id)
+        return comments
+
+    except EventNotFoundError:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Récupère uniquement les commentaires racines (sans parent)
-    result = await db.execute(
-        select(EventComment)
-        .where(EventComment.event_id == event_id, EventComment.parent_id == None)
-        .options(selectinload(EventComment.replies))
-        .order_by(EventComment.created_at.asc())
-    )
-    root_comments = result.scalars().all()
-
-    # Fonction récursive pour construire le schema avec replies
-    def to_response(comment: EventComment) -> EventCommentResponse:
-        return EventCommentResponse(
-            id=comment.id,
-            event_id=comment.event_id,
-            author_id=comment.author_id,
-            content=comment.content,
-            created_at=comment.created_at,
-            updated_at=comment.updated_at,
-            replies=[to_response(reply) for reply in comment.replies] if comment.replies else []
+    except Exception as e:
+        # Log l’erreur ici si tu veux
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error while retrieving comments"
         )
-
-    return [to_response(c) for c in root_comments]

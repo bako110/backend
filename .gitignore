@@ -2,24 +2,21 @@
 env/
 venv/
 ENV/
-ENV.bak/
 .venv/
 
-# Ignorer les fichiers Python temporaires
+# Ignorer caches et fichiers Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 
-# Ignorer le fichier de config des variables d'environnement
+# Ignorer variables d'environnement
+.env
 *.env
 
-# Ignorer les fichiers générés par Django
-*.sqlite3
-staticfiles/
-media/
+# Ignorer fichiers de migrations compilés ou uploads
+static/upload/
+static/uploads/
 
-# Ignorer les fichiers des IDE
+# IDE
 .vscode/
 .idea/
-*.log

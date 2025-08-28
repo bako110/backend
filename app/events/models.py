@@ -7,6 +7,10 @@ from enum import Enum
 from app.db.session import Base
 from datetime import datetime
 
+# Important : importer User pour éviter des erreurs et bien typer les relations
+from app.auth.models import User
+
+
 # Table d'association pour les participants aux événements
 event_participants = Table(
     'event_participants',
@@ -29,37 +33,38 @@ class EventCategory(str, Enum):
 
 class Event(Base):
     __tablename__ = "events"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(100), nullable=False, index=True)
     description = Column(Text, nullable=False)
-    date = Column(TIMESTAMP(timezone=True), nullable=False) 
+    date = Column(TIMESTAMP(timezone=True), nullable=False)
     location = Column(String(255), nullable=False)
     category = Column(String(20), nullable=False, index=True)
     price = Column(String(50), default="Gratuit")
     image = Column(String(500), nullable=True)
-    
+
     is_public = Column(Boolean, default=True, index=True)
     allow_comments = Column(Boolean, default=True)
     allow_sharing = Column(Boolean, default=True)
     max_attendees = Column(Integer, nullable=True)
-    
+
+    comments_count = Column(Integer, default=0)  # ✅ AJOUT ICI
+
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
+
     organizer_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     organizer = relationship("User", back_populates="organized_events", lazy="joined")
 
-    
     participants = relationship(
         "User",
         secondary=event_participants,
         back_populates="joined_events"
     )
-    
-    comments = relationship("EventComment", back_populates="event", cascade="all, delete-orphan")
 
+    comments = relationship("EventComment", back_populates="event", cascade="all, delete-orphan")
     activities = relationship("EventActivity", back_populates="event", cascade="all, delete-orphan")
+
     
     def __repr__(self):
         return f"<Event(id={self.id}, title='{self.title}', date='{self.date}')>"

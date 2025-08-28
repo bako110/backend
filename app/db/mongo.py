@@ -6,6 +6,7 @@ client = AsyncIOMotorClient(settings.MONGO_URL)
 db = client[settings.MONGO_DB]
 
 # Collections
+users_collection = db["users"]
 profiles_collection = db["profiles"]
 friendships_collection = db["friendships"]
 events_collection = db["events"]
@@ -14,3 +15,5 @@ notifications_collection = db["notifications"]
 wishlists_collection = db["wishlists"]
 media_collection = db["media"]
 reminders_collection = db["reminders"]
+messages_collection = db["messages"]
+conversations_collection = db["conversations"] 

@@ -132,7 +132,7 @@ class EventResponse(BaseModel):
     organizer: OrganizerOut
     participant_count: int
     is_full: bool
-
+    comments_count: int
     model_config = ConfigDict(from_attributes=True)
 
 class EventWithDetails(EventResponse):

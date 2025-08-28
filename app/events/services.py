@@ -1,12 +1,10 @@
 import logging
 from datetime import datetime, timezone
 from typing import Optional, List
-
 from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 import json
-
 from app.db.mongo import profiles_collection
 from app.auth.schemas import UserSchema
 from app.events.models import Event, EventCategory, EventActivity, EventComment
@@ -19,7 +17,6 @@ from app.events.schemas import (
     EventCommentResponse,
     EventCommentCreate
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +84,8 @@ class EventService:
 
             self.db.add(db_event)
             await self.db.flush()
-            logger.info(f"Event created: id={db_event.id}, title={db_event.title}, by organizer_id={organizer_id}")
 
+            logger.info(f"Event created: id={db_event.id}, title={db_event.title}, by organizer_id={organizer_id}")
             await self._create_activity(
                 event_id=db_event.id,
                 user_id=organizer_id,
@@ -98,7 +95,6 @@ class EventService:
 
             await self.db.commit()
             await self.db.refresh(db_event)
-
             logger.info(f"Event created: {db_event.id} by user {organizer_id}")
             return db_event
 
@@ -123,11 +119,28 @@ class EventService:
         current_user_id: Optional[int] = None
     ) -> dict:
         offset = (page - 1) * per_page
-        query = select(Event).options(
-            selectinload(Event.organizer),
-            selectinload(Event.participants)
+
+        # Sous-requête qui compte les commentaires par event_id
+        comment_count_subq = (
+            select(
+                EventComment.event_id,
+                func.count(EventComment.id).label("comments_count")
+            )
+            .group_by(EventComment.event_id)
+            .subquery()
         )
 
+        # Join entre Event et cette sous-requête
+        query = (
+            select(Event, comment_count_subq.c.comments_count)
+            .outerjoin(comment_count_subq, Event.id == comment_count_subq.c.event_id)
+            .options(
+                selectinload(Event.organizer),
+                selectinload(Event.participants)
+            )
+        )
+
+        # Appliquer filtres existants
         if filters:
             if filters.category:
                 query = query.where(Event.category == filters.category)
@@ -154,18 +167,19 @@ class EventService:
 
         query = query.offset(offset).limit(per_page)
         result = await self.db.execute(query)
-        events = result.scalars().unique().all()
 
+        # Chaque résultat est un tuple (Event, comments_count)
+        rows = result.all()
         total_pages = (total_events + per_page - 1) // per_page
-
         serialized = []
-        for event in events:
+
+        for event, comments_count in rows:
+            print(f"Event {event.id} has {comments_count or 0} comments")
             profile = await profiles_collection.find_one(
                 {"user_id": event.organizer.id},
                 {"_id": 0, "avatar_url": 1}
             )
             avatar_url = profile["avatar_url"] if profile and "avatar_url" in profile else None
-
             organizer_data = {
                 "id": event.organizer.id,
                 "email": event.organizer.email or "",
@@ -175,13 +189,11 @@ class EventService:
                 "phone": getattr(event.organizer, 'phone', None),
                 "avatar_url": avatar_url
             }
-
             participant_count = len(event.participants)
             is_full = (
                 event.max_attendees is not None and
                 participant_count >= event.max_attendees
             )
-
             image_path = event.image
             if image_path and image_path.startswith("static/"):
                 image_path = image_path[len("static/"):]
@@ -205,11 +217,11 @@ class EventService:
                 "organizer": organizer_data,
                 "organizer_name": organizer_data["full_name"],
                 "participant_count": participant_count,
-                "is_full": is_full
+                "is_full": is_full,
+                "comments_count": comments_count or 0,
             }
             serialized.append(event_data)
 
-        logger.info(f"Total events: {total_events}, Returned events count: {len(events)}")
         return {
             "events": serialized,
             "total": total_events,
@@ -229,15 +241,10 @@ class EventService:
         self.db.add(activity)
         await self.db.flush()
 
-    async def create_comment(self, event_id: int, comment_data: EventCommentCreate, author_id: int) -> EventComment:
-        db_comment = EventComment(**comment_data.dict(), event_id=event_id, author_id=author_id)
-        self.db.add(db_comment)
-        await self.db.commit()
-        await self.db.refresh(db_comment)
-        return db_comment
+    async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
+        logger.info(f"Start loading comments for event_id={event_id}")
 
-async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
-        # 1. Récupérer les commentaires parents (parent_id is None), avec auteur chargé (nom + prénom)
+        # 1. Récupérer les commentaires parents (parent_id is None), avec auteur chargé
         result = await self.db.execute(
             select(EventComment)
             .where(
@@ -245,11 +252,13 @@ async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
                 EventComment.parent_id.is_(None)
             )
             .order_by(EventComment.created_at.asc())
-            .options(selectinload(EventComment.author))  # charge la relation author (PostgreSQL)
+            .options(selectinload(EventComment.author))
         )
         parents = result.scalars().all()
+        logger.info(f"Step 1: Found {len(parents)} parent comments")
 
         if not parents:
+            logger.warning(f"No parent comments found for event_id={event_id}")
             return []
 
         parent_ids = [c.id for c in parents]
@@ -261,6 +270,7 @@ async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
             .options(selectinload(EventComment.author))
         )
         replies = result.scalars().all()
+        logger.info(f"Step 2: Found {len(replies)} reply comments")
 
         # 3. Construire un dictionnaire parent_id -> liste de réponses
         replies_by_parent = {}
@@ -269,6 +279,7 @@ async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
 
         # 4. Récupérer tous les user_id des auteurs (parents + replies)
         user_ids = {comment.author_id for comment in parents + replies if comment.author_id is not None}
+        logger.info(f"Step 3: Extracted user_ids from comments: {user_ids}")
 
         # 5. Charger en une seule requête les avatars depuis MongoDB
         avatar_map = {}
@@ -279,53 +290,56 @@ async def get_comments(self, event_id: int) -> List[EventCommentResponse]:
         async for profile in cursor:
             avatar_map[profile["user_id"]] = profile.get("avatar_url")
 
-        # 6. Fonction récursive pour construire la hiérarchie, avec avatar_url (Mongo) et full_name (PostgreSQL)
+        logger.info(f"Step 4: Loaded avatar map for users: {list(avatar_map.keys())}")
+
+        # 6. Vérification détaillée des parents et auteurs
+        logger.info("Step 5: Inspecting parent comments and their authors:")
+        for c in parents:
+            if c.author is None:
+                logger.error(f"Parent comment ID {c.id} has no author loaded! author_id={c.author_id}")
+            else:
+                logger.debug(f"Parent comment ID {c.id} author: id={c.author.id}, first_name='{c.author.first_name}', last_name='{c.author.last_name}'")
+
+        logger.info("Step 6: Inspecting reply comments and their authors:")
+        for r in replies:
+            if r.author is None:
+                logger.error(f"Reply comment ID {r.id} has no author loaded! author_id={r.author_id}")
+            else:
+                logger.debug(f"Reply comment ID {r.id} author: id={r.author.id}, first_name='{r.author.first_name}', last_name='{r.author.last_name}'")
+
+        logger.info(f"Step 7: Avatar map keys: {list(avatar_map.keys())}")
+
+        # 7. Fonction récursive pour construire la hiérarchie, avec avatar_url (Mongo) et full_name (PostgreSQL)
         def build_tree(comment: EventComment):
-    author = comment.author
-    full_name = None
-    avatar_url = None
-    if author:
-        full_name = " ".join(filter(None, [author.first_name, author.last_name])).strip() or "Anonyme"
-        avatar_url = avatar_map.get(author.id) or None
-    else:
-        full_name = "Anonyme"
-    logger.debug(f"Comment ID {comment.id} by author_id {comment.author_id} - full_name: {full_name}, avatar_url: {avatar_url}")
+            author = comment.author
+            avatar_url = None
+            full_name = "Utilisateur supprimé"  # fallback si auteur supprimé
+            if author:
+                first_name = author.first_name or ""
+                last_name = author.last_name or ""
+                full_name = f"{first_name} {last_name}".strip() or "Anonyme"
+                avatar_url = avatar_map.get(author.id)
 
-    return EventCommentResponse(
-        id=comment.id,
-        content=comment.content,
-        created_at=comment.created_at,
-        updated_at=comment.updated_at,
-        event_id=comment.event_id,
-        author_id=comment.author_id,
-        parent_id=comment.parent_id,
-        avatar_url=avatar_url,
-        full_name=full_name,
-        replies=[build_tree(child) for child in replies_by_parent.get(comment.id, [])]
-    )
-    def build_tree(comment: EventComment):
-        author = comment.author
-        full_name = None
-        avatar_url = None
-        if author:
-            full_name = " ".join(filter(None, [author.first_name, author.last_name])).strip() or "Anonyme"
-            avatar_url = avatar_map.get(author.id) or None
-        else:
-            full_name = "Anonyme"
-        logger.debug(f"Comment ID {comment.id} by author_id {comment.author_id} - full_name: {full_name}, avatar_url: {avatar_url}")
+            # Logs détaillés pour debug
+            logger.debug(f"Building comment id={comment.id}:")
+            logger.debug(f"  author_id={comment.author_id}")
+            logger.debug(f"  full_name='{full_name}'")
+            logger.debug(f"  avatar_url='{avatar_url}'")
 
-        return EventCommentResponse(
-            id=comment.id,
-            content=comment.content,
-            created_at=comment.created_at,
-            updated_at=comment.updated_at,
-            event_id=comment.event_id,
-            author_id=comment.author_id,
-            parent_id=comment.parent_id,
-            avatar_url=avatar_url,
-            full_name=full_name,
-            replies=[build_tree(child) for child in replies_by_parent.get(comment.id, [])]
-        )
+            return EventCommentResponse(
+                id=comment.id,
+                content=comment.content,
+                created_at=comment.created_at,
+                updated_at=comment.updated_at,
+                event_id=comment.event_id,
+                author_id=comment.author_id,
+                parent_id=comment.parent_id,
+                avatar_url=avatar_url,
+                full_name=full_name,
+                replies=[build_tree(child) for child in replies_by_parent.get(comment.id, [])]
+            )
 
-        # 7. Retourner la liste complète avec hiérarchie
-        return [build_tree(parent) for parent in parents]
+        # 8. Retourner la liste complète avec hiérarchie
+        comments_tree = [build_tree(parent) for parent in parents]
+        logger.info(f"Loaded {len(comments_tree)} top-level comments for event_id={event_id}")
+        return comments_tree
