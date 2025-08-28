@@ -1,0 +1,25 @@
+# Ignorer l'environnement virtuel
+env/
+venv/
+ENV/
+ENV.bak/
+.venv/
+
+# Ignorer les fichiers Python temporaires
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignorer le fichier de config des variables d'environnement
+*.env
+
+# Ignorer les fichiers générés par Django
+*.sqlite3
+staticfiles/
+media/
+
+# Ignorer les fichiers des IDE
+.vscode/
+.idea/
+*.log
