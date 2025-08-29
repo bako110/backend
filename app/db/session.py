@@ -1,3 +1,4 @@
+# app/db/session.py
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -6,8 +7,12 @@ import os
 
 load_dotenv()
 
-POSTGRES_URL = os.getenv("POSTGRES_URL")  # Exemple: "postgresql+asyncpg://users:6277bako@localhost/Annivdb"
+# URL PostgreSQL Aiven format asyncpg
+POSTGRES_URL = os.getenv(
+    "POSTGRES_URL"
+)  # "postgresql+asyncpg://avnadmin:password@host:port/dbname?sslmode=require"
 
+# Base pour les modèles
 Base = declarative_base()
 
 # Créer le moteur async
@@ -24,5 +29,3 @@ AsyncSessionLocal = sessionmaker(
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
-
-
